@@ -1,3 +1,19 @@
+# Customized
+tmp_*
+
+# ignore
+.vscode
+*.pyc
+__pycache__/
+
+# vim swap file
+*.swp
+
+# coverage report
+test-results/
+htmlcov/
+.coverage
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
