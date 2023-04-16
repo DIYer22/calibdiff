@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 
-import cv2
 import boxx
 import torch
 import torch.optim as optim
-from torch.autograd import Variable
-from torch import nn
+from boxx import npa, np
+import calibrating
 
 with boxx.inpkg():
     from . import calibdiff_utils
     from . import rt_to_rectify
 
+device = calibdiff_utils.device
+
 
 class StereoOptimize:
-    def __init__(self, stereo, uv_pairs):
+    def __init__(self, stereo, uvs1, uvs2):
         self.stereo = stereo
-        self.uv_pairs = torch.from_numpy(uv_pairs)
+        self.uv_pairs = torch.from_numpy(np.concatenate([uvs1, uvs2], 1)).to(device)
         self.context = self.stereo_to_context()
 
     def stereo_to_context(self):
@@ -35,7 +36,9 @@ class StereoOptimize:
             cx2=cam2.cx,
             cy2=cam2.cy,
         )
-        param = {k: torch.tensor(v, requires_grad=True) for k, v in para_.items()}
+        param = {
+            k: torch.tensor(v).to(device).requires_grad_() for k, v in para_.items()
+        }
 
         context["param"] = param
         return context
@@ -69,14 +72,13 @@ class StereoOptimize:
                 uv1_rectifys[:, 1] - uv2_rectifys[:, 1]
             ).mean()
             loss = loss_polar_alignment / self.stereo.cam1.xy[1]
-            # loss = (R*tht([1.,200,30000000.])).sum()
+            # loss = loss**2
             loss.backward()
-            if idx % 100 == 0:
-                p - {k: v.grad for k, v in param.items()}
+            if idx % 100 == 0 and boxx.mg():
+                # print({k: v.grad for k, v in param.items()})
                 print(
                     f"Iteration {idx}: loss_polar_alignment = {loss_polar_alignment.item()}"
                 )
-                # g()/0
             optimizer.step()
 
         return calibrating.Stereo.load(
@@ -101,13 +103,71 @@ class StereoOptimize:
             )
         )
 
+    __call__ = optimize
+
+
+def get_jx_stereo():
+    root = "/home/dl/ai_asrs/2011_jingxin_info/big_file_jingxin/calibrating_data/2201.checkboard_img2"
+    feature_lib = calibrating.CheckboardFeatureLib((8, 5), 26.03)
+    undistorted = False
+    caml = calibrating.Cam(
+        glob(os.path.join(root, "*/0_color.jpg")),
+        feature_lib,
+        name="jx-caml",
+        enable_cache=True,
+        undistorted=undistorted,
+        save_feature_vis=False,
+    )
+    camr = calibrating.Cam(
+        glob(os.path.join(root, "*/0_stereo.jpg")),
+        feature_lib,
+        name="jx-camr",
+        enable_cache=True,
+        undistorted=undistorted,
+        save_feature_vis=False,
+    )
+
+    stereo = calibrating.Stereo.load(
+        """
+R: [[1,0,0.],[0,1,0,],[0.,0,1.]]
+_calibrating_version: 0.6.2
+cam1:
+  cx: 2012
+  cy: 1518
+  fx: 3230
+  fy: 3230
+  xy:
+  - 4024
+  - 3036
+cam2:
+  cx: 2012
+  cy: 1518
+  fx: 3230
+  fy: 3230
+  xy:
+  - 4024
+  - 3036
+t:
+- - -0.43
+- - 0.0
+- - 0.0
+"""
+    )
+    # stereo.R = cv2.Rodrigues(boxx.npa-[0.17]*3)[0]
+    return caml, camr, stereo
+
 
 if __name__ == "__main__":
-    from boxx.ylth import *
     from boxx import glob, os
-    import calibrating
 
-    caml, camr, camd = calibrating.get_test_cams("aruco").values()
+    with boxx.inpkg():
+        from .feature_matching import (
+            LoftrFeatureMatching,
+            get_uv_pairs_from_stereo_boards,
+        )
+        from boxx import *
+
+    caml, camr, camd = calibrating.get_test_cams().values()
 
     stereo = calibrating.Stereo.load(
         """
@@ -136,69 +196,37 @@ t:
 """
     )
 
-    def get_jx_stereo():
-        root = "/home/dl/ai_asrs/2011_jingxin_info/big_file_jingxin/calibrating_data/2201.checkboard_img2"
-        feature_lib = calibrating.CheckboardFeatureLib((8, 5), 26.03)
-        undistorted = False
-        caml = calibrating.Cam(
-            glob(os.path.join(root, "*/0_color.jpg")),
-            feature_lib,
-            name="jx-caml",
-            enable_cache=True,
-            undistorted=undistorted,
-            save_feature_vis=False,
-        )
-        camr = calibrating.Cam(
-            glob(os.path.join(root, "*/0_stereo.jpg")),
-            feature_lib,
-            name="jx-camr",
-            enable_cache=True,
-            undistorted=undistorted,
-            save_feature_vis=False,
-        )
+    # caml, camr, stereo = get_jx_stereo()
 
-        stereo = calibrating.Stereo.load(
-            """
-R: [[1,0,0.],[0,1,0,],[0.,0,1.]]
-_calibrating_version: 0.6.2
-cam1:
-  cx: 2012
-  cy: 1518
-  fx: 3230
-  fy: 3230
-  xy:
-  - 4024
-  - 3036
-cam2:
-  cx: 2012
-  cy: 1518
-  fx: 3230
-  fy: 3230
-  xy:
-  - 4024
-  - 3036
-t:
-- - -0.43
-- - 0.0
-- - 0.0
-"""
-        )
-        # stereo.R = cv2.Rodrigues(boxx.npa-[0.17]*3)[0]
-        return caml, camr, stereo
-
-    caml, camr, stereo = get_jx_stereo()
     stereo_gt = calibrating.Stereo(caml, camr)
-
     # stereo = stereo_gt.copy()
+    # TODO 为什么在不设置畸变的情况下, 从 gt 继承初始值效果差好多?
 
-    uv1s, uv2s, objps = points_conjoint = stereo_gt.get_conjoint_points()
-    uv_pairs = np.concatenate([np.concatenate(uv1s, 0), np.concatenate(uv2s, 0)], 1)
+    mode = "LoFTR_feature"
+    # mode = "boards_feature"
+    if mode == "LoFTR_feature":
+        feature_matching = LoftrFeatureMatching(dict(topk=0.5))
+        img_path_pairs = [
+            (
+                caml[k]["path"],
+                camr[k]["path"],
+            )
+            for k in caml
+            if k in camr
+        ]
+        matched = feature_matching.process_img_path_pairs(img_path_pairs[:3])
+        uvs1, uvs2 = matched["uvs1"], matched["uvs2"]
+    elif mode == "boards_feature":
+        uvs1, uvs2 = get_uv_pairs_from_stereo_boards(stereo_gt)
 
-    self = stereo_optimize = StereoOptimize(stereo, uv_pairs)
+    stereo_optimize = StereoOptimize(stereo, uvs1, uvs2)
 
-    stereo_re = self.optimize()
+    stereo_re = stereo_optimize.optimize()
+    print("stereo_gt:")
     print(stereo_gt)
+    print("stereo_re:")
     print(stereo_re)
     caml.vis_stereo(camr, stereo_gt)
     caml.vis_stereo(camr, stereo_re)
     caml.vis_stereo(camr, stereo)
+    # showb - feature_matching.vis(matched)

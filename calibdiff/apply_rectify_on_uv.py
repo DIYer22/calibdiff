@@ -11,7 +11,9 @@ def apply_rectify_on_uv(uvs, K, R):
     已知一个相机图像上的多个点 uvs (n*[u ,v]), 相机内参 K(3*3), 对相机做一个 R 的旋转, 求旋转后的 uvs_rotate, 用 PyTorch 实现
     """
 
-    uv1 = torch.cat((uvs, torch.ones(uvs.shape[0], 1)), dim=-1)  # n * [u, v, 1]
+    uv1 = torch.cat(
+        (uvs, torch.ones(uvs.shape[0], 1).to(uvs.device)), dim=-1
+    )  # n * [u, v, 1]
 
     # 用相机内参矩阵 K 的逆矩阵将图像坐标转换为相机坐标
     K_inv = torch.inverse(K)

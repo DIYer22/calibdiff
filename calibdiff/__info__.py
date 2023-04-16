@@ -1,5 +1,5 @@
 __version__ = "0.0.1"
-__description__ = "Differential camera library. Calibrate intrinsic, extrinsic and stereo camera by PyTorch."
+__description__ = "A PyTorch-based differential camera calibration library for intrinsic, extrinsic, and stereo camera calibration."
 __license__ = "MIT"
 __author__ = "DIYer22"
 __author_email__ = "ylxx@live.com"

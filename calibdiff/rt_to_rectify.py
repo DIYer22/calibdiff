@@ -6,6 +6,7 @@ with boxx.inpkg():
     from . import calibdiff_utils
 
 eps = 1e-8
+device = calibdiff_utils.device
 
 
 def project_vec_on_plane(v, plane_v):
@@ -21,8 +22,8 @@ def rotate_shortest_of_two_vecs(v1, v2):
 
 
 def stereo_recitfy(R, t):
-    axes_z = torch.tensor([0, 0, 1.0]).type_as(R)
-    axes_nx = torch.tensor([-1.0, 0, 0]).type_as(R)
+    axes_z = torch.tensor([0, 0, 1.0]).type_as(R).to(device)
+    axes_nx = torch.tensor([-1.0, 0, 0]).type_as(R).to(device)
     t = t.squeeze()
     plane_v = t
     z_on_plane2 = project_vec_on_plane(axes_z, plane_v)

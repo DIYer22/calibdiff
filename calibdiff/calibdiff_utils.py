@@ -10,6 +10,12 @@ with boxx.inpkg():
     from .apply_rectify_on_uv import apply_rectify_on_uv
 
 eps = 1e-8
+device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+
+def torch_tensor(arr, **argkws):
+    argkws.setdefault("device", device)
+    return torch.tensor(arr, **argkws)
 
 
 def rodrigues_pytorch(rvec):
@@ -18,10 +24,11 @@ def rodrigues_pytorch(rvec):
     #     return torch.eye(3).type_as(rvec)
 
     k = rvec / theta
-    K = torch.tensor([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    K = torch_tensor([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    # TODO 有梯度吗?
 
     R = (
-        torch.eye(3)
+        torch.eye(3).to(device)
         + torch.sin(theta) * K
         + (1 - torch.cos(theta)) * torch.matmul(K, K)
     )
@@ -82,12 +89,13 @@ class DifferentiableRotateByContinuityRotation:
 DifferentiableRotate = DifferentiableRotateByContinuityRotation
 # DifferentiableRotate = DifferentiableRotateByRodrigues
 
+
 def generate_K(fx, cx, fy, cy):
     K = torch.stack(
         [
-            torch.cat([fx.unsqueeze(0), torch.tensor([0.0]), cx.unsqueeze(0)]),
-            torch.cat([torch.tensor([0.0]), fy.unsqueeze(0), cy.unsqueeze(0)]),
-            torch.tensor([0.0, 0.0, 1.0]),
+            torch.cat([fx.unsqueeze(0), torch_tensor([0.0]), cx.unsqueeze(0)]),
+            torch.cat([torch_tensor([0.0]), fy.unsqueeze(0), cy.unsqueeze(0)]),
+            torch_tensor([0.0, 0.0, 1.0]),
         ],
         dim=0,
     )
@@ -124,10 +132,10 @@ def get_test_data():
         points[i] = [point_left[1], point_left[0], point_right[1], point_right[0]]
 
     # 将生成的合成数据转换为 PyTorch 张量
-    fx1, fy1, cx1, cy1, h1, w1 = map(torch.tensor, [fx1, fy1, cx1, cy1, h1, w1])
-    fx2, fy2, cx2, cy2, h2, w2 = map(torch.tensor, [fx2, fy2, cx2, cy2, h2, w2])
-    r, t = map(torch.tensor, [r, t])
-    uv_pairs = torch.tensor(points, dtype=torch.float)
+    fx1, fy1, cx1, cy1, h1, w1 = map(torch_tensor, [fx1, fy1, cx1, cy1, h1, w1])
+    fx2, fy2, cx2, cy2, h2, w2 = map(torch_tensor, [fx2, fy2, cx2, cy2, h2, w2])
+    r, t = map(torch_tensor, [r, t])
+    uv_pairs = torch_tensor(points, dtype=torch.float)
 
     # 将参数设为可优化的变量
     d = dict(uv_pairs=uv_pairs)
@@ -153,11 +161,69 @@ def get_test_data():
 
     d["R"] = DifferentiableRotate.to_R(d["r"])
     # for i in range(1,3):
-    #     d[f'K{i}'] = torch.tensor([[d[f'fx{i}'], 0, d[f'cx{i}']],[0, d[f'fy{i}'], d[f'cy{i}']],[0,0,1]], requires_grad=True)
+    #     d[f'K{i}'] = torch_tensor([[d[f'fx{i}'], 0, d[f'cx{i}']],[0, d[f'fy{i}'], d[f'cy{i}']],[0,0,1]], requires_grad=True)
 
     for i in range(1, 3):
         d[f"K{i}"] = generate_K(d[f"fx{i}"], d[f"cx{i}"], d[f"fy{i}"], d[f"cy{i}"])
     return d
+
+
+"""
+pormpt: Write a function to vis points matched in two images
+- uvs1 are normalizd xy(0~1) of points in img1
+- img are RGB format(h,w,3). if img is None, just replace by a 512*512 black img
+- line color between uv1 and uv2 are random Highly saturated colors.
+- if has confidence shape(n,), less confidence more tranparent
+- support img1 and img2 have different shape
+- line thickness are adaptive to img size 
+"""
+
+
+def vis_matched_uvs(uvs1, uvs2, img1=None, img2=None, confidence=None):
+    from random import randint
+
+    if img1 is None:
+        img1 = np.zeros((512, 512, 3), dtype=np.uint8)
+    if img2 is None:
+        img2 = np.zeros((512, 512, 3), dtype=np.uint8)
+
+    h1, w1, _ = img1.shape
+    h2, w2, _ = img2.shape
+
+    # Resize images to have the same height
+    if h1 != h2:
+        new_w1 = int(w1 * h2 / h1)
+        img1 = cv2.resize(img1, (new_w1, h2))
+        h1, w1, _ = img1.shape
+
+    # Create a black canvas with the same height as img1 and img2, and the sum of their widths
+    canvas = np.zeros((h1, w1 + w2, 3), dtype=np.uint8)
+    canvas[:, :w1, :] = img1
+    canvas[:, w1:, :] = img2
+
+    if confidence is not None:
+        if confidence.ndim == 1:
+            confidence = np.expand_dims(confidence, axis=1)
+        assert (
+            uvs1.shape[0] == confidence.shape[0]
+        ), "Confidence values must match the number of points in uvs1"
+    if uvs1.max() > 1 and uvs2.max() > 1:
+        uvs1 = uvs1 / [w1, h1]
+        uvs2 = uvs2 / [w2, h2]
+    for i, (uv1, uv2) in enumerate(zip(uvs1, uvs2)):
+        x1, y1 = int(uv1[0] * w1), int(uv1[1] * h1)
+        x2, y2 = int(uv2[0] * w2) + w1, int(uv2[1] * h2)
+
+        line_color = (randint(0, 255), randint(0, 255), randint(0, 255))
+        line_thickness = max(1, int(min(w1, w2) * 0.0015))
+
+        if confidence is not None:
+            alpha = max(0.2, min(1, confidence[i]))
+            line_color = tuple(int(c * alpha) for c in line_color)
+
+        cv2.line(canvas, (x1, y1), (x2, y2), line_color, thickness=line_thickness)
+
+    return canvas
 
 
 if __name__ == "__main__":
