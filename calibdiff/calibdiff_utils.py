@@ -24,8 +24,20 @@ def rodrigues_pytorch(rvec):
     #     return torch.eye(3).type_as(rvec)
 
     k = rvec / theta
-    K = torch_tensor([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
-    # TODO 有梯度吗?
+    K = torch.stack(
+        [
+            torch_tensor(0.0),
+            -k[2],
+            k[1],
+            k[2],
+            torch_tensor(0.0),
+            -k[0],
+            -k[1],
+            k[0],
+            torch_tensor(0.0),
+        ]
+    ).view(3, 3)
+    # K = torch_tensor([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
 
     R = (
         torch.eye(3).to(device)
@@ -168,6 +180,28 @@ def get_test_data():
     return d
 
 
+def set_rotate_imread_for_test(rotate_substr="stereo_r.jpg", angle=30):
+    def _imread(fname, *l, **kv):
+        import skimage.io
+
+        img = skimage.io.imread(fname, *l, **kv)
+        if rotate_substr in fname:
+            print(fname)
+            img = np.uint8(
+                __import__("skimage.transform").transform.rotate(img, angle=angle)
+                * 255.5
+            )
+        return img
+
+    boxx.imread = _imread
+
+
+def try_load_img(arr_or_path):
+    if isinstance(arr_or_path, str):
+        return boxx.imread(arr_or_path)
+    return arr_or_path
+
+
 """
 pormpt: Write a function to vis points matched in two images
 - uvs1 are normalizd xy(0~1) of points in img1
@@ -180,13 +214,15 @@ pormpt: Write a function to vis points matched in two images
 
 
 def vis_matched_uvs(uvs1, uvs2, img1=None, img2=None, confidence=None):
-    from random import randint
-
+    if uvs1.max() > 1 and uvs2.max() > 1:
+        maxx = max(uvs1.max(), uvs2.max())
+        uvs1 = uvs1 / ([maxx, maxx] if img1 is None else img1.shape[:2][::-1])
+        uvs2 = uvs2 / ([maxx, maxx] if img2 is None else img2.shape[:2][::-1])
     if img1 is None:
-        img1 = np.zeros((512, 512, 3), dtype=np.uint8)
+        img1 = np.zeros((1024, 1024, 3), dtype=np.uint8) + 192
     if img2 is None:
-        img2 = np.zeros((512, 512, 3), dtype=np.uint8)
-
+        img2 = np.zeros((1024, 1024, 3), dtype=np.uint8) + 64
+    img1, img2 = try_load_img(img1), try_load_img(img2)
     h1, w1, _ = img1.shape
     h2, w2, _ = img2.shape
 
@@ -207,21 +243,37 @@ def vis_matched_uvs(uvs1, uvs2, img1=None, img2=None, confidence=None):
         assert (
             uvs1.shape[0] == confidence.shape[0]
         ), "Confidence values must match the number of points in uvs1"
-    if uvs1.max() > 1 and uvs2.max() > 1:
-        uvs1 = uvs1 / [w1, h1]
-        uvs2 = uvs2 / [w2, h2]
+    # First, draw all lines
+    line_colors = boxx.getDefaultColorList(12, uint8=True) * (len(uvs1) // 10 + 1)
     for i, (uv1, uv2) in enumerate(zip(uvs1, uvs2)):
         x1, y1 = int(uv1[0] * w1), int(uv1[1] * h1)
         x2, y2 = int(uv2[0] * w2) + w1, int(uv2[1] * h2)
 
-        line_color = (randint(0, 255), randint(0, 255), randint(0, 255))
-        line_thickness = max(1, int(min(w1, w2) * 0.0015))
+        line_color = line_colors[i]
+        line_thickness = max(1, int(min(w1, w2) * 0.001))
 
         if confidence is not None:
             alpha = max(0.2, min(1, confidence[i]))
             line_color = tuple(int(c * alpha) for c in line_color)
 
         cv2.line(canvas, (x1, y1), (x2, y2), line_color, thickness=line_thickness)
+
+    # Then, draw all points
+    for i, (uv1, uv2) in enumerate(zip(uvs1, uvs2)):
+        x1, y1 = int(uv1[0] * w1), int(uv1[1] * h1)
+        x2, y2 = int(uv2[0] * w2) + w1, int(uv2[1] * h2)
+
+        line_color = line_colors[i]
+        point_radius = max(1, int(min(w1, w2) * 0.0015))
+
+        if confidence is not None:
+            alpha = max(0.2, min(1, confidence[i]))
+            line_color = tuple(int(c * alpha) for c in line_color)
+
+        cv2.circle(canvas, (x1, y1), point_radius * 2, (255, 255, 255), thickness=-1)
+        cv2.circle(canvas, (x2, y2), point_radius * 2, (255, 255, 255), thickness=-1)
+        cv2.circle(canvas, (x1, y1), point_radius, line_color, thickness=-1)
+        cv2.circle(canvas, (x2, y2), point_radius, line_color, thickness=-1)
 
     return canvas
 

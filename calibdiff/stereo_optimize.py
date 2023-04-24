@@ -2,20 +2,29 @@
 
 import boxx
 import torch
-import torch.optim as optim
-from boxx import npa, np
 import calibrating
+import torch.optim as optim
+from boxx import npa, np, strnum, glob, os
 
 with boxx.inpkg():
     from . import calibdiff_utils
     from . import rt_to_rectify
+    from .calibdiff_utils import eps, device
 
-device = calibdiff_utils.device
+# calibdiff_utils.set_rotate_imread_for_test()
 
 
 class StereoOptimize:
     def __init__(self, stereo, uvs1, uvs2):
         self.stereo = stereo
+        if not all(stereo.t):
+            import warnings
+
+            warnings.warn(
+                f"stereo.t({stereo.t}) has zeros, try to add eps as {self.stereo.t + eps}",
+                UserWarning,
+            )
+            self.stereo.t = self.stereo.t + eps
         self.uv_pairs = torch.from_numpy(np.concatenate([uvs1, uvs2], 1)).to(device)
         self.context = self.stereo_to_context()
 
@@ -68,22 +77,36 @@ class StereoOptimize:
             uv2_rectifys = calibdiff_utils.apply_rectify_on_uv(
                 self.uv_pairs[:, 2:], d["K2"], re["R2"]
             )
-            loss_polar_alignment = torch.abs(
-                uv1_rectifys[:, 1] - uv2_rectifys[:, 1]
-            ).mean()
-            loss = loss_polar_alignment / self.stereo.cam1.xy[1]
-            # loss = loss**2
+
+            l1s = torch.abs(uv1_rectifys[:, 1] - uv2_rectifys[:, 1])
+            _, loss_idx = l1s.topk(int(len(l1s) * 0.95), largest=False)
+            retval = l1s.mean()
+
+            lossd = {}
+            lossd["polar_alignment"] = l1s[loss_idx].mean() / self.stereo.cam1.xy[1]
+
+            # lossd['l2'] = (((
+            #     uv1_rectifys[:, 1] - uv2_rectifys[:, 1]
+            # )/(18))**2)[loss_idx].mean()
+
+            target_baseline = self.stereo.baseline
+            lossd["distance"] = (
+                (target_baseline - (param["t"] ** 2 + eps).sum() ** 0.5)
+                / (target_baseline * 1 + eps)
+            ) ** 2
+
+            loss = sum(lossd.values())
             loss.backward()
-            if idx % 100 == 0 and boxx.mg():
+            if idx % 100 == 0 and 1:  # boxx.mg():
                 # print({k: v.grad for k, v in param.items()})
                 print(
-                    f"Iteration {idx}: loss_polar_alignment = {loss_polar_alignment.item()}"
+                    f"Iteration {idx}: retval={strnum(retval.item())}, {', '.join([f'{k}={strnum(lossd[k])}' for k in lossd])}"
                 )
             optimizer.step()
 
         return calibrating.Stereo.load(
             dict(
-                retval=loss_polar_alignment,
+                retval=retval,
                 R=npa - R,
                 t=npa - param["t"],
                 cam1=dict(
@@ -158,8 +181,6 @@ t:
 
 
 if __name__ == "__main__":
-    from boxx import glob, os
-
     with boxx.inpkg():
         from .feature_matching import (
             LoftrFeatureMatching,
@@ -167,7 +188,9 @@ if __name__ == "__main__":
         )
         from boxx import *
 
-    caml, camr, camd = calibrating.get_test_cams().values()
+    example_type = "checkboard"
+    example_type = "aruco"
+    caml, camr, camd = calibrating.get_test_cams(example_type).values()
 
     stereo = calibrating.Stereo.load(
         """
@@ -191,30 +214,35 @@ cam2:
   - 1824
 t:
 - - -0.3
-- - -0.0
+- - 0.0
 - - 0.0
 """
     )
+    if example_type == "checkboard":
+        for cam in [stereo.cam1, stereo.cam2]:
+            cam.K = np.array([[2545, 0, 1250.0], [0, 2545, 900], [0, 0, 1]])
+            cam.xy = (2500, 1800)
 
     # caml, camr, stereo = get_jx_stereo()
 
     stereo_gt = calibrating.Stereo(caml, camr)
     # stereo = stereo_gt.copy()
     # TODO 为什么在不设置畸变的情况下, 从 gt 继承初始值效果差好多?
+    # DONE: test L2 loss, little different, L1 sigtly better than L2
+    img_path_pairs = [
+        (
+            caml[k]["path"],
+            camr[k]["path"],
+        )
+        for k in caml
+        if k in camr
+    ]
 
     mode = "LoFTR_feature"
     # mode = "boards_feature"
     if mode == "LoFTR_feature":
-        feature_matching = LoftrFeatureMatching(dict(topk=0.5))
-        img_path_pairs = [
-            (
-                caml[k]["path"],
-                camr[k]["path"],
-            )
-            for k in caml
-            if k in camr
-        ]
-        matched = feature_matching.process_img_path_pairs(img_path_pairs[:3])
+        feature_matching = LoftrFeatureMatching(dict(topk=0.995))
+        matched = feature_matching.process_img_path_pairs(img_path_pairs[:1])
         uvs1, uvs2 = matched["uvs1"], matched["uvs2"]
     elif mode == "boards_feature":
         uvs1, uvs2 = get_uv_pairs_from_stereo_boards(stereo_gt)
@@ -226,7 +254,9 @@ t:
     print(stereo_gt)
     print("stereo_re:")
     print(stereo_re)
-    caml.vis_stereo(camr, stereo_gt)
+    # caml.vis_stereo(camr, stereo_gt)
     caml.vis_stereo(camr, stereo_re)
-    caml.vis_stereo(camr, stereo)
-    # showb - feature_matching.vis(matched)
+    # caml.vis_stereo(camr, stereo)
+    img1, img2 = boxx.imread(img_path_pairs[0][0]), boxx.imread(img_path_pairs[0][1])
+    matched_vis = feature_matching.vis(matched, img1, img2)
+    boxx.shows(matched_vis)
