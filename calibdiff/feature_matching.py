@@ -111,17 +111,15 @@ class LoftrFeatureMatching(MetaFeatureMatching):
 
         self.kornia = kornia
         self.cfg = cfg or {}
+        self.cfg.setdefault("shape", (576, 768))
+        # self.cfg.setdefault("shape", (384, 512))
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
         self.matcher = kornia.feature.LoFTR(pretrained="indoor_new").to(self.device)
 
     def matching_in_torch(self, th_img1, th_img2):
-        # resize_shape = (480, 640)
-        resize_shape = (768, 1024)
-        # resize_shape = (576, 768)
-        # if boxx.mg():
-        #     resize_shape = (240, 320)
+        resize_shape = self.cfg.get("shape")
 
         img1 = self.kornia.geometry.resize(th_img1, resize_shape, antialias=True)
         img2 = self.kornia.geometry.resize(th_img2, resize_shape, antialias=True)
@@ -171,17 +169,19 @@ class LoftrFeatureMatching(MetaFeatureMatching):
         uvs2 = correspondences["keypoints1"].cpu().numpy()
         confidence = correspondences["confidence"].cpu().numpy()
 
-        assert uvs1.size > 20, f"Too few matched points {uvs1}"
-        Fm, inliers = cv2.findFundamentalMat(
-            uvs1 * img1.shape[:2][::-1],
-            uvs2 * img2.shape[:2][::-1],
-            cv2.USAC_MAGSAC,
-            1.0,
-            0.99995,
-            100000,
-        )
-        # TODO why 0.99 => .75 works for aruco?
-        idxs = inliers[:, 0] > -10
+        idxs = np.ones(len(uvs1), np.bool8)
+        if self.cfg.get("fundamental_mat_confidence"):
+            assert uvs1.size > 20, f"Too few matched points {uvs1}"
+            Fm, inliers = cv2.findFundamentalMat(
+                uvs1 * img1.shape[:2][::-1],
+                uvs2 * img2.shape[:2][::-1],
+                cv2.USAC_MAGSAC,
+                1.0,
+                self.cfg.get("fundamental_mat_confidence"),
+                100000,
+            )
+            # TODO why 0.99 => .75 works for aruco?
+            idxs = inliers[:, 0] > 0
         topk = self.cfg.get("topk", len(uvs1))
         if topk <= 1:
             topk = int(idxs.sum() * topk + 1)

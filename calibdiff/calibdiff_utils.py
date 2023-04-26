@@ -214,7 +214,8 @@ pormpt: Write a function to vis points matched in two images
 
 
 def vis_matched_uvs(uvs1, uvs2, img1=None, img2=None, confidence=None):
-    if uvs1.max() > 1 and uvs2.max() > 1:
+
+    if uvs1.size and uvs1.max() > 1 and uvs2.max() > 1:
         maxx = max(uvs1.max(), uvs2.max())
         uvs1 = uvs1 / ([maxx, maxx] if img1 is None else img1.shape[:2][::-1])
         uvs2 = uvs2 / ([maxx, maxx] if img2 is None else img2.shape[:2][::-1])
@@ -236,6 +237,8 @@ def vis_matched_uvs(uvs1, uvs2, img1=None, img2=None, confidence=None):
     canvas = np.zeros((h1, w1 + w2, 3), dtype=np.uint8)
     canvas[:, :w1, :] = img1
     canvas[:, w1:, :] = img2
+    if not uvs1.size:
+        return canvas
 
     if confidence is not None:
         if confidence.ndim == 1:

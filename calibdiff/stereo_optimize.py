@@ -15,7 +15,8 @@ with boxx.inpkg():
 
 
 class StereoOptimize:
-    def __init__(self, stereo, uvs1, uvs2):
+    def __init__(self, stereo, uvs1, uvs2, cfg=None):
+        self.cfg = cfg or {}
         self.stereo = stereo
         if not all(stereo.t):
             import warnings
@@ -94,10 +95,14 @@ class StereoOptimize:
                 (target_baseline - (param["t"] ** 2 + eps).sum() ** 0.5)
                 / (target_baseline * 1 + eps)
             ) ** 2
+            if self.cfg.get("z_to_0"):
+                lossd["z_to_0"] = (
+                    (param["t"][-1] - 0) / (target_baseline * 1 + eps)
+                ) ** 2
 
             loss = sum(lossd.values())
             loss.backward()
-            if idx % 100 == 0 and 1:  # boxx.mg():
+            if idx % 100 == 0 and self.cfg.get("log", True):  # boxx.mg():
                 # print({k: v.grad for k, v in param.items()})
                 print(
                     f"Iteration {idx}: retval={strnum(retval.item())}, {', '.join([f'{k}={strnum(lossd[k])}' for k in lossd])}"
