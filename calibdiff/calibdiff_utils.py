@@ -10,7 +10,7 @@ with boxx.inpkg():
     from .apply_rectify_on_uv import apply_rectify_on_uv
 
 eps = 1e-8
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+device = torch.device("cuda") if torch.cuda.device_count() else torch.device("cpu")
 
 
 def torch_tensor(arr, **argkws):
@@ -100,6 +100,18 @@ class DifferentiableRotateByContinuityRotation:
 
 DifferentiableRotate = DifferentiableRotateByContinuityRotation
 # DifferentiableRotate = DifferentiableRotateByRodrigues
+
+
+def R_t_to_T_torch(R, t=None):
+    if t is None:
+        t = torch.zeros((3,), device=R.device, dtype=R.dtype)
+    t = t.view(3, 1)
+    last_row = torch.tensor([0.0, 0.0, 0.0, 1.0], device=R.device, dtype=R.dtype).view(
+        1, 4
+    )
+    Rt = torch.cat([R, t], dim=1)
+    T = torch.cat([Rt, last_row], dim=0)
+    return T
 
 
 def generate_K(fx, cx, fy, cy):

@@ -10,6 +10,7 @@ with boxx.inpkg():
     from . import calibdiff_utils
     from . import rt_to_rectify
     from .calibdiff_utils import eps, device
+    from .distort_optimize import undistort
 
 # calibdiff_utils.set_rotate_imread_for_test()
 
@@ -45,6 +46,8 @@ class StereoOptimize:
             fy2=cam2.fy,
             cx2=cam2.cx,
             cy2=cam2.cy,
+            # D1=cam1.D,
+            # D2=cam2.D
         )
         param = {
             k: torch.tensor(v).to(device).requires_grad_() for k, v in para_.items()
@@ -72,11 +75,15 @@ class StereoOptimize:
                 )
             R = calibdiff_utils.DifferentiableRotate.to_R(param["r"])
             re = rt_to_rectify.stereo_recitfy(R, param["t"])
+            uv_undistort1, uv_undistort2 = self.uv_pairs[:, :2], self.uv_pairs[:, 2:]
+            if "D1" in param:
+                uv_undistort1 = undistort(uv_undistort1, d["K1"], param["D1"])
+                uv_undistort2 = undistort(uv_undistort2, d["K2"], param["D2"])
             uv1_rectifys = calibdiff_utils.apply_rectify_on_uv(
-                self.uv_pairs[:, :2], d["K1"], re["R1"]
+                uv_undistort1, d["K1"], re["R1"]
             )
             uv2_rectifys = calibdiff_utils.apply_rectify_on_uv(
-                self.uv_pairs[:, 2:], d["K2"], re["R2"]
+                uv_undistort2, d["K2"], re["R2"]
             )
 
             l1s = torch.abs(uv1_rectifys[:, 1] - uv2_rectifys[:, 1])
@@ -108,7 +115,7 @@ class StereoOptimize:
                     f"Iteration {idx}: retval={strnum(retval.item())}, {', '.join([f'{k}={strnum(lossd[k])}' for k in lossd])}"
                 )
             optimizer.step()
-
+        boxx.mg()
         return calibrating.Stereo.load(
             dict(
                 retval=retval,
@@ -120,6 +127,7 @@ class StereoOptimize:
                     fy=param["fy1"],
                     cy=param["cy1"],
                     xy=self.stereo.cam1.xy,
+                    D=npa(param.get("D1", np.zeros((1, 5)))),
                 ),
                 cam2=dict(
                     fx=param["fx2"],
@@ -127,6 +135,7 @@ class StereoOptimize:
                     fy=param["fy2"],
                     cy=param["cy2"],
                     xy=self.stereo.cam2.xy,
+                    D=npa(param.get("D2", np.zeros((1, 5)))),
                 ),
             )
         )
@@ -186,6 +195,8 @@ t:
 
 
 if __name__ == "__main__":
+    torch.autograd.set_detect_anomaly(True)
+
     with boxx.inpkg():
         from .feature_matching import (
             LoftrFeatureMatching,
