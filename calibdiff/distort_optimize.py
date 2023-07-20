@@ -129,7 +129,8 @@ if __name__ == "__main__":
         param = {"D": tht(cam.D * 0).requires_grad_()}
         uv_ds = tht(uv_ds.copy())
         uv_unds = tht(uv_unds.copy())
-        K = tht(cam.K)
+        K = tht(cam.K.copy()).round().requires_grad_()
+        param["K"] = K
 
         optimizer = optim.Adam(param.values(), lr=3e-4)
         num_iterations = 14000

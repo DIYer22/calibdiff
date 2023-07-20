@@ -1,5 +1,7 @@
 # Customized
 tmp_*
+*.mp4
+*.avi
 
 # ignore
 .vscode

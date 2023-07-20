@@ -23,7 +23,7 @@ def rodrigues_pytorch(rvec):
     # if theta == 0:
     #     return torch.eye(3).type_as(rvec)
 
-    k = rvec / theta
+    k = (rvec / theta).squeeze()
     K = torch.stack(
         [
             torch_tensor(0.0),
