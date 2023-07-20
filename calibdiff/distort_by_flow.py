@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import cv2
 import boxx
 import torch
 import calibrating
@@ -9,7 +10,7 @@ class DistortByFlow(torch.nn.Module):
         super().__init__()
         self.hw = hw
         self.arg2 = arg2
-        self.param = torch.nn.Parameter(torch.zeros([int(round(i*arg2)) for i in hw]))
+        self.param = torch.nn.Parameter(torch.zeros([int(round(i*arg2)) for i in hw])) + 20
         # self.undistort_flow = # resize param to hw using bicubic (h, w)
 
     def undistort_points(self, uvs):
@@ -21,18 +22,26 @@ class DistortByFlow(torch.nn.Module):
         if uv in hw, return uv + self.undistort_flow[v, u]
         else returnu uv
         """
-        self.undistort_flow = F.interpolate(self.param.unsqueeze(0).unsqueeze(0), size=hw, mode='bicubic', align_corners=False).squeeze(0).squeeze(0)
-
+        if isinstance(uvs, np.ndarray):
+            uvs = torch.from_numpy(uvs)
+        self.undistort_flow = F.interpolate(self.param.unsqueeze(0).unsqueeze(0), size=self.hw, mode='bicubic', align_corners=False).squeeze(0).squeeze(0)
+        
+        uvs_ = uvs.round().long()
+        u, v = uvs_[:, 0], uvs_[:, 1], 
         mask = (0 <= u) & (u < self.hw[1]) & (0 <= v) & (v < self.hw[0])
         assert mask.all()
-        uvs_ = uvs.round().long()
         return uvs + self.undistort_flow[uvs_[0],uvs_[1]]
 
     def distort(self, img):
         self
     
     def undistort(self, img):
-        self
+        
+        if not hasattr(self, "undistort_flow_np"):
+            self.undistort_flow = F.interpolate(self.param.unsqueeze(0).unsqueeze(0), size=self.hw, mode='bicubic', align_corners=False).squeeze(0).squeeze(0)
+            self.undistort_flow_np = boxx.npa(undistort_flow)
+               
+        cv2.remap()
 
 
 if __name__ == "__main__":
@@ -48,5 +57,5 @@ if __name__ == "__main__":
     
     
     distort = DistortByFlow(hw=cam.xy[::-1])
-    distort.undistort_points(uvs_ds)
+    uv_unds = distort.undistort_points(uv_ds)
     
