@@ -113,6 +113,7 @@ class LoftrFeatureMatching(MetaFeatureMatching):
         self.cfg = cfg or {}
         self.cfg.setdefault("shape", (576, 768))
         # self.cfg.setdefault("shape", (384, 512))
+        self.cfg["shape"] = tuple(self.cfg["shape"])
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
